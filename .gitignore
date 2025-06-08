@@ -1,0 +1,15 @@
+# OS / Editor / IDE junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# PHP-specific
+vendor/
+composer.lock
+
+# Log / temp files
+*.log
+*.tmp
+inwx_cookie*
