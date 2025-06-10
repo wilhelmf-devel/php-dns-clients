@@ -61,7 +61,7 @@ class myInwxApiClient
         return $result;
     }
 
-    public function AccountInfo() : array
+    public function AccountInfo(): array
     {
 	    $return=$this->call('account.info');
 	    return $return["resData"];
@@ -71,7 +71,7 @@ class myInwxApiClient
     // 
 
     // List all domains
-    public function DomainsList(bool $full=true) : array
+    public function DomainsList(bool $full=true): array
     {
 	    $return=array();
 	    $return_simple=array();
@@ -86,7 +86,7 @@ class myInwxApiClient
     }
 
     // Get domain info
-    public function DomainInfo(string $domain) : array
+    public function DomainInfo(string $domain): array
     {
 	    $return = $this->call('domain.info', ['domain' => $domain]);
 	    return $return["resData"];
@@ -105,7 +105,7 @@ class myInwxApiClient
     // BEGIN Contact Section
     //
 
-    public function ContactsList() : array
+    public function ContactsList(): array
     {
 	    $return=array();
 	    $contacts=$this->call('contact.list');
@@ -114,7 +114,7 @@ class myInwxApiClient
 	    return $return;
     }
 
-    public function ContactsLog() : array
+    public function ContactsLog(): array
     {
 	    $return = $this->call('contact.log');
 	    return $return["resData"];
@@ -126,7 +126,7 @@ class myInwxApiClient
     //
 
     // List all zones
-    public function ZonesList() : array
+    public function ZonesList(): array
     {
         $domains = [];
         $result = $this->call('nameserver.list');
@@ -148,7 +148,6 @@ class myInwxApiClient
     }
 
     // General addRecord supporting all record types
-    // $extra is an optional assoc array for special fields (SRV, HTTPS, etc)
     public function ZoneAddRecord(string $domain, string $name, string $type, string $content, int $ttl = 3600, int $prio = null) : int
     {
         $params = [
@@ -197,7 +196,7 @@ class myInwxApiClient
     }
 
     // Copy all records from $fromDomain to $toDomain
-    public function ZoneClone(string $fromDomain, string $toDomain) : int
+    public function ZoneClone(string $fromDomain, string $toDomain): int
     {
         $return = $this->call('nameserver.clone', [
             'sourceDomain' => $fromDomain,

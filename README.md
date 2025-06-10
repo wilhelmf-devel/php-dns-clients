@@ -6,7 +6,8 @@ No autoloaders, no dependencies – just drop in the class you need.
 ## Supported Providers
 
 - INWX (implemented)
-- [More to come: Hetzner, Cloudflare, etc.]
+- InternetX (Schlund, Leonex, ...) (implemented)
+- [More to come: Hetzner, Route53]
 
 ## Features
 
