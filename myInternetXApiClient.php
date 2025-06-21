@@ -94,19 +94,40 @@ class myInternetXApiClient
 		return $return;
 	}
 
-	public function ZoneCreate(string $domain, int $ttl = null, array $nameservers = []): bool
+	public function ZoneCreate(string $domain, int $ttl = 86400, array $nameservers = []): bool
 	{
 		// Creates a new DNS zone, optionally with nameservers and default TTL.
 		$data = [
-			"name" => $domain
+			"origin" => $domain,
+			"defaultTTL" => $ttl
 		];
-		if (!empty($nameservers)) $data["nameServers"] = $nameservers;
 
-		if ($ttl !== null) $data["defaultTTL"] = $ttl;
+		if (empty($nameservers)) $nameservers = $this -> _ZoneGetDefaultNS();
+
+		if (!empty($nameservers)) {
+			// Flexible Übergabe: Entweder String-Array oder Array von Arrays
+			if (is_array($nameservers[0]) && isset($nameservers[0]['name']))
+				$data["nameServers"] = $nameservers;
+			else {
+				$data["nameServers"] = array_map(
+					fn($ns) => ["name" => $ns],
+					$nameservers
+				);
+			}
+		} 
+
+		$soa = [
+			"primary" => $data["nameServers"][0]["name"],
+			"mail"    => "hostmaster." . $domain . ".",
+			"refresh" => 43200,
+			"retry"   => 7200,
+			"expire"  => 1209600,
+			"ttl"     => $ttl ?? 86400
+		];
+		$data["soa"] = $soa;
 
 		$result = $this->callApi("POST", "/zone", $data);
 		return ($result["status"]["type"] == "SUCCESS");
-
 	}
 
 	public function ZoneDelete(string $domain) : bool
@@ -119,16 +140,53 @@ class myInternetXApiClient
 	public function ZoneListRecords(string $domain)
 	{
 		// Returns all records of a zone as an array (non-AXFR, structured JSON)
-		$result = $this->callApi("GET", "/zone/$domain/_info");
-		if ($result["status"]["type"] == "SUCCESS" && isset($result["data"][0]["records"]))
-			return $result["data"][0]["records"];
+		$result = $this->callApi("GET", "/zone/$domain");
+		if ($result["status"]["type"] == "SUCCESS" && isset($result["data"][0]["resourceRecords"]))
+			return $result["data"][0]["resourceRecords"];
 		else
 			return false;
 	}
 
-	private function _ZonesGetNS($domain)
+	public function _ZoneGetDefaultNS(): array
 	{
-		// Returns the virtual nameserver of a zone 
+		// Use dry-run to simulate domain creation and extract default nameservers
+		$data = [ "domain" => [ "name" => "dryrun-example-test-zone.com", "ownerContact" => [ "handle" => "AUTO" ] ] ];
+		$result = $this->callApi("POST", "/domain", ["dryRun" => true, "data" => $data]);
+		if (
+			isset($result["status"]["type"]) && $result["status"]["type"] === "SUCCESS" &&
+			isset($result["object"]["type"]) && $result["object"]["type"] === "Domain" &&
+			isset($result["data"][0]["nameServers"])
+		) return $result["data"][0]["nameServers"];
+		// Special Section for Schlundtech
+		if ($this->robotcontext=="10" && preg_match('/^\d{7,}$/',$this->username))
+		{
+			// With Schlundtech the default nameservers use the last digit in the username/customer id within the nameserver name
+			$x=substr($this->username, -1);
+			return ["nsa".$x.".schlundtech.de","nsb".$x.".schlundtech.de","nsc".$x.".schlundtech.de","nsd".$x.".schlundtech.de"];
+		}
+		// Last Resort - let's try to get the nameservers of the first zone we can find
+		$allzones = $this->ZonesList();
+		if (is_array($allzones) && count($allzones) > 0) return $this->_ZoneGetNS($allzones[0]);
+
+		// If no nameservers are found, return an empty array
+		return [];
+	}
+
+	public function _ZoneGetNS($domain): array
+	{
+		// Returns an array of nameserver hostnames for the given zone, using AXFR parsing.
+		$zone = $this->Zone_axfr($domain);
+		if (!is_array($zone)) return [];
+		$return = [];
+		foreach ($zone as $record)
+			if ($record["type"] === "NS" && ($record["FQDN"] === $domain || $record["FQDN"] === $domain . "."))
+				$return[] = $record["content"];
+		return $return;
+	}
+
+	public function _ZonesGetVNS($domain)
+	{
+		// Returns the virtual nameserver of a zone
 		$search=json_decode('{ "filters": [ { "key": "name", "value": "'.$domain.'", "operator": "LIKE" } ] }');
 		$result=$this->callApi('POST', "/zone/_search",$search);
 		if ($result["status"]["type"]=="SUCCESS" && $result["object"]["type"]=="Zone" && is_array($result["data"]) && count($result["data"])==1)
@@ -189,8 +247,8 @@ class myInternetXApiClient
 		$data = [ "adds" => [] ];
 		foreach ($entries as $entry) {
 			if (isset($entry["name"])) $name=$entry["name"]; else continue;
-			if (isset($entry["content"])) $content=$entry["content"]; else continue;
-			if (isset($entry["ttl"])) $ttl=$entry["ttl"]; else $ttl=NULL;
+			if (isset($entry["value"])) $content=$entry["value"]; else continue;
+			if (isset($entry["ttl"])) $ttl=$entry["ttl"]; 
 			if (isset($entry["type"])) $type=$entry["type"]; else continue;
 			$type = strtoupper($type);
 			if (!in_array($type,array("A","MX","CNAME","TXT","SRV","PTR","AAAA","NS","CAA","PROCEED_MUC","TLSA","NAPTR","SSHFP","LOC","RP","HINFO","PROCEED","ALIAS","DNSKEY","NSEC","DS"))) continue;
@@ -199,7 +257,7 @@ class myInternetXApiClient
 				"type" => $type,
 				"value" => $content
 			];
-			if ($ttl !== NULL) $record["ttl"] = $ttl;
+			if (isset($ttl)) $record["ttl"] = $ttl;
 			// Add prio for MX, SRV, NAPTR
 			if (in_array($type, ["MX", "SRV", "NAPTR"]) && isset($entry["prio"])) $record["prio"] = $entry["prio"];
 			$data['adds'][] = $record;
@@ -217,8 +275,8 @@ class myInternetXApiClient
 		$data = [ "rems" => [] ];
 		foreach ($entries as $entry) {
 			if (isset($entry["name"])) $name=$entry["name"]; else continue;
-			if (isset($entry["content"])) $content=$entry["content"]; else continue;
-			if (isset($entry["ttl"])) $ttl=$entry["ttl"]; else $ttl=NULL;
+			if (isset($entry["value"])) $content=$entry["value"]; else continue;
+			if (isset($entry["ttl"])) $ttl=$entry["ttl"];
 			if (isset($entry["type"])) $type=$entry["type"]; else continue;
 			$type=strtoupper($type);
 			if (!in_array($type,array("A","MX","CNAME","TXT","SRV","PTR","AAAA","NS","CAA","PROCEED_MUC","TLSA","NAPTR","SSHFP","LOC","RP","HINFO","PROCEED","ALIAS","DNSKEY","NSEC","DS"))) continue;
@@ -227,7 +285,7 @@ class myInternetXApiClient
 				"type" => $type,
 				"value" => $content
 			];
-			if ($ttl !== NULL) $record["ttl"] = $ttl;
+			if (isset($ttl)) $record["ttl"] = $ttl;
 			// Add prio for MX, SRV, NAPTR
 			if (in_array($type, ["MX", "SRV", "NAPTR"]) && isset($entry["prio"])) $record["prio"] = $entry["prio"];
 			$data['rems'][] = $record;
@@ -251,58 +309,30 @@ class myInternetXApiClient
 		if ($this->ZoneExists($toDomain)) return false;
 
 		// Get all records from source zone
-		$sourceZone = $this->callApi("GET", "/zone/$fromDomain/_info");
-		if (!isset($sourceZone["status"]["type"]) || $sourceZone["status"]["type"] !== "SUCCESS")
-			return false;
+		$sourceZone = $this->ZoneListRecords($fromDomain);
+		if (empty($sourceZone)) return false;
 
-		$sourceData = $sourceZone["data"][0] ?? null;
-		if (!$sourceData || !isset($sourceData["records"]))
-			return false;
+		$sourceZoneNS = $this->_ZoneGetNS($fromDomain);
+		if (empty($sourceZoneNS)) return false;
 
-		$defaultTTL = $sourceData["defaultTTL"] ?? null;
-		$records = [];
-		foreach ($sourceData["records"] as $record) {
-			// Skip SOA and NS records
-			if (in_array($record["type"], ["SOA", "NS"])) continue;
-			$entry = [
-				"name" => $record["name"],
-				"type" => $record["type"],
-				"content" => $record["value"],
-			];
-			if (isset($record["ttl"]))   $entry["ttl"] = $record["ttl"];
-			if (isset($record["prio"]))  $entry["prio"] = $record["prio"];
-			$records[] = $entry;
-		}
-
-		// Create the new zone with same defaultTTL
-		$createResult = $this->ZoneCreate($toDomain, $defaultTTL, []);
-		if (!$createResult) return false;
-
-		// Add all records to new zone
-		foreach ($records as $entry) {
-			// For MX/SRV/NAPTR, pass prio if present
-			$ttl = $entry["ttl"] ?? null;
-			$prio = $entry["prio"] ?? null;
-			$type = $entry["type"];
-			$addResult = null;
-			if (in_array($type, ["MX", "SRV", "NAPTR"]))
-				$addResult = $this->ZoneAddRecord($toDomain, $entry["name"], $type, $entry["content"], $ttl, $prio);
+		if ($this->ZoneCreate($toDomain, 86400, $sourceZoneNS)) 
+		{
+			if ($this->ZoneAddRecords($toDomain, $sourceZone))
+				return true;
 			else
-				$addResult = $this->ZoneAddRecord($toDomain, $entry["name"], $type, $entry["content"], $ttl);
-			if (!$addResult) {
-				// Rollback: Delete the newly created zone if record import fails
 				$this->ZoneDelete($toDomain);
-				return false;
-			}
-
 		}
-		return true;
+
+		return false;
 	}
 
 	public function Zone_axfr(string $domain) 
 	{
+		// Attempts an AXFR zone transfer for $domain using its virtual nameserver.
+		// Returns an array of records or false on failure.
+
 		// First we need to get the primary nameserver to get the full URL of the API request
-		if ($ns=$this->_ZonesGetNS($domain))
+		if ($ns=$this->_ZonesGetVNS($domain))
   			$result=$this->callApi("GET","/zone/".$domain."/".$ns."/_axfr");
 		else 
 			return false;
@@ -311,6 +341,10 @@ class myInternetXApiClient
 			$lines=explode("\n",$result["data"][0]);
 			if (empty($lines[count($lines)])) unset($lines[count($lines)-1]);
 			$return=array();
+
+			// Parses AXFR response into an array of records.
+			// Each record contains: FQDN, name, ttl, type, content.
+			// Assumes tab-separated fields as returned by the API.
 			foreach ($lines as $line) 
 			{
 				$tmp1=explode("\t",$line);
