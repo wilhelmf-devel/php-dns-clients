@@ -7,7 +7,8 @@ No autoloaders, no dependencies – just drop in the class you need.
 
 - INWX (implemented)
 - InternetX (Schlund, Leonex, ...) (implemented)
-- [More to come: Hetzner, Route53]
+- Hetzner (implemented)
+- [More to come: Nameshield, AWS Route53, Cloudfront]
 
 ## Features
 
