@@ -1,6 +1,6 @@
 # PHP DNS Clients
 
-A simple and lightweight collection of single-file PHP classes for managing DNS zones and records via the APIs of various DNS providers.  
+A simple and lightweight collection of single-file PHP classes for managing DNS zones and records via the APIs of various DNS providers.
 No autoloaders, no dependencies – just drop in the class you need.
 
 ## Supported Providers
@@ -8,7 +8,7 @@ No autoloaders, no dependencies – just drop in the class you need.
 - INWX (implemented)
 - InternetX (Schlund, Leonex, ...) (implemented)
 - Hetzner (implemented)
-- [More to come: Nameshield, AWS Route53, Cloudfront]
+- (Possibly more to come: Nameshield, Cloudflare. AWS Route53 is a maybe due to its authentication complexity.)
 
 ## Features
 
