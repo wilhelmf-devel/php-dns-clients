@@ -178,13 +178,29 @@ class myInwxApiClient
 	    return $this->call('nameserver.deleteRecord', ['id' => $id]);
     }
 
-    // Create a new empty zone
-    public function ZoneCreate(string $domain, int $ttl = 3600)
+   // Returns Nameserver Sets
+    public function ZonesListNameservers(): array
     {
-        return $this->call('nameserver.createZone', [
-            'domain' => $domain,
-            'ttl'    => $ttl
-        ]);
+	    $list=$this->call('nameserverset.list');
+	    $return = array();
+	    foreach ($list['resData']['nsset'] as $curset)
+		    array_push($return,$curset['ns']);
+	    return $return;
+    }
+
+    // Create a new empty zone
+    public function ZoneCreate(string $domain, array $nameservers = [])
+    {
+	    if (empty($nameservers)) {
+		    $defaultns=$this->ZonesListNameservers();
+		    $nameservers=$defaultns[0];
+	    }
+	
+	    return $this->call('nameserver.create', [
+		    'domain' => $domain,
+		    'type' => 'MASTER',
+		    'ns' => $nameservers
+	]);
     }
 
     // Delete a zone
