@@ -35,7 +35,6 @@ MDCertificateAgreement accepted
 #MDContactEmail #If not defined ServerAdmin will be used
 #MDPrivateKeys secp256r1 rsa3072
 MDPrivateKeys secp256r1
-<IfModule ssl_module>
 <VirtualHost *:443>
         ServerAdmin webmaster@non-wildcard-example.org
         ServerName non-wildcard-example.org
@@ -45,16 +44,15 @@ MDPrivateKeys secp256r1
         ...
 
 </VirtualHost>
-</IfModule>
 
-
+# If you run into issues due to DNS propergaion times
+# you might want to increase the retry delay 
+# MDRetryDelay 310
 <MDomain example.com *.example.com>
     MDCAChallenges dns-01
     MDChallengeDns01 /usr/local/bin/inwx-modmd-acme-helper.php
-    MDRetryDelay 310
 </MDomain>
-LogLevel md:debug
-<IfModule ssl_module>
+#LogLevel md:debug
 <VirtualHost *:443>
         ServerAdmin webmaster@example.com
         ServerName example.com
@@ -63,6 +61,5 @@ LogLevel md:debug
         ...
 
 </VirtualHost>
-</IfModule>
 ```
 

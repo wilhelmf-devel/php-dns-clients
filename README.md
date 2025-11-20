@@ -47,3 +47,11 @@ Please keep the spirit: single file, no dependencies, focus on DNS zone/record m
 ## License
 
 MIT
+
+## Requirements
+
+PHP modules required:
+
+- `php-cli`
+- `php-curl`
+- `php-xmlrpc`
