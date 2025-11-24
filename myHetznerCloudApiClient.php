@@ -20,6 +20,8 @@
  *   - Only minimal changes required in existing code (constructor + method names are simple).
  *   - No hard dependency on numeric zone or RR IDs; all public methods work with zone name
  *     and RR name/type (the Cloud API already supports id_or_name).
+ *
+ * Built with support from OpenAI Codex.
  */
 class myHetznerCloudApiClient
 {

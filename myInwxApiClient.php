@@ -178,6 +178,38 @@ class myInwxApiClient
 	    return $this->call('nameserver.deleteRecord', ['id' => $id]);
     }
 
+    // Delete a record by name/type/content (compat wrapper).
+    public function ZoneDeleteRecord(string $domain, string $name, string $type, string $content = null)
+    {
+        // INWX deletes by record id, so we look up matching records first.
+        $records = $this->ZoneListRecords($domain);
+        $type = strtoupper($type);
+
+        foreach ($records as $rec) {
+            if (strtoupper($rec['type']) !== $type) continue;
+            if ($rec['name'] !== $name) continue;
+            if ($content !== null && $rec['content'] !== $content) continue;
+
+            $this->ZoneDeleteRecordId((int)$rec['id']);
+        }
+
+        return true;
+    }
+
+    // Delete multiple records (compat wrapper).
+    // Each entry: ['name' => ..., 'type' => ..., 'content' => optional]
+    public function ZoneDeleteRecords(string $domain, array $entries): bool
+    {
+        foreach ($entries as $entry) {
+            if (!is_array($entry) || empty($entry['type']) || !isset($entry['name'])) {
+                continue;
+            }
+            $content = $entry['content'] ?? null;
+            $this->ZoneDeleteRecord($domain, $entry['name'], $entry['type'], $content);
+        }
+        return true;
+    }
+
    // Returns Nameserver Sets
     public function ZonesListNameservers(): array
     {
@@ -201,6 +233,27 @@ class myInwxApiClient
 		    'type' => 'MASTER',
 		    'ns' => $nameservers
 	]);
+    }
+
+    // Add multiple records (compat wrapper).
+    // Each entry: ['type' => ..., 'name' => ..., 'content' => ..., 'ttl' => 3600, 'prio' => null]
+    public function ZoneAddRecords(string $domain, array $entries): array
+    {
+        $created = [];
+        foreach ($entries as $idx => $entry) {
+            if (!is_array($entry) || empty($entry['type']) || !isset($entry['name']) || !isset($entry['content'])) {
+                $created[$idx] = null;
+                continue;
+            }
+
+            $ttl  = $entry['ttl']  ?? 3600;
+            $prio = $entry['prio'] ?? null;
+
+            $id = $this->ZoneAddRecord($domain, $entry['name'], $entry['type'], $entry['content'], $ttl, $prio);
+            $created[$idx] = $id;
+        }
+
+        return $created;
     }
 
     // Delete a zone
