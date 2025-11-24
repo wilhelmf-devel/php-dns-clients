@@ -3,6 +3,9 @@
 /**
  * Simple Class for Hetzner DNS JSON API.
  *
+ * NOTE: This client targets Hetzner's legacy standalone DNS API.
+ * The legacy API is deprecated and may stop working; prefer the new Hetzner Cloud DNS API instead.
+ *
  * This class is intentionally done very simple.
  * It provides a minimal client for the Hetzner DNS API,
  * focusing on DNS zone and record management. Only a subset of the API is implemented,
