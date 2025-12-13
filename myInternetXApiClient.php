@@ -351,7 +351,7 @@ class myInternetXApiClient
 				$tmp2["FQDN"]=$tmp1[0];
 				$tmp2["name"]=substr($tmp1[0],0,-(strlen($domain)+2));
 				if (empty($tmp2["name"])) $tmp2["name"]="@";
-				if (empty($tmp1[1]) && $tmp1[3]=="IN") array_splice($tmp1, 1, 1); // If there is one tab more then expected remove it. 
+				while (isset($tmp1[1]) && $tmp1[1] === "" && isset($tmp1[2]) && $tmp1[2] !== "IN") array_splice($tmp1, 1, 1); // Remove unexpexted tabs
 				$tmp2["ttl"]=$tmp1[1];
 				$tmp2["type"]=$tmp1[3];
 				$tmp2["content"]=$tmp1[4];
