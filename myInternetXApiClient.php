@@ -116,14 +116,14 @@ class myInternetXApiClient
 			}
 		} 
 
-		$soa = [
-			"primary" => $data["nameServers"][0]["name"],
-			"mail"    => "hostmaster." . $domain . ".",
-			"refresh" => 43200,
-			"retry"   => 7200,
-			"expire"  => 1209600,
-			"ttl"     => $ttl ?? 86400
-		];
+			$soa = [
+				"primary" => $data["nameServers"][0]["name"],
+				"email"   => "hostmaster." . $domain . ".",
+				"refresh" => 43200,
+				"retry"   => 7200,
+				"expire"  => 1209600,
+				"ttl"     => $ttl ?? 86400
+			];
 		$data["soa"] = $soa;
 
 		$result = $this->callApi("POST", "/zone", $data);
@@ -137,14 +137,86 @@ class myInternetXApiClient
 		return ($result["status"]["type"] == "SUCCESS");
 	}
 
-	public function ZoneListRecords(string $domain)
+	public function ZoneListRecords(string $domain, bool $includeDomainDefaults = true)
 	{
-		// Returns all records of a zone as an array (non-AXFR, structured JSON)
+		// Returns all records of a zone as an array (non-AXFR, structured JSON).
+		// Optionally merges zone-level defaults like main/wwwInclude.
+		$zone = $this->ZoneInfo($domain);
+		if (!is_array($zone) || !isset($zone["resourceRecords"]) || !is_array($zone["resourceRecords"])) return false;
+
+		$records = $zone["resourceRecords"];
+		if (!$includeDomainDefaults) return $records;
+
+		$main = null;
+		if (isset($zone["main"]) && is_array($zone["main"])) {
+			foreach (["value", "ip", "address", "ipAddress", "mainIp", "mainip"] as $key) {
+				if (isset($zone["main"][$key]) && $zone["main"][$key] !== "") {
+					$main = $zone["main"][$key];
+					break;
+				}
+			}
+		}
+
+		$wwwInclude = false;
+		foreach (["wwwInclude", "wwwinclude", "www_included", "includeWww"] as $key) {
+			if (isset($zone[$key])) {
+				$wwwInclude = filter_var($zone[$key], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+				$wwwInclude = ($wwwInclude === null) ? (bool)$zone[$key] : $wwwInclude;
+				break;
+			}
+		}
+
+		if (empty($main)) return $records;
+
+		$mainType = null;
+		if (filter_var($main, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) $mainType = "A";
+		if (filter_var($main, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) $mainType = "AAAA";
+		if ($mainType === null) return $records;
+
+		$hasRoot = false;
+		$hasWww = false;
+		$domainNoDot = rtrim($domain, ".");
+		foreach ($records as $rec) {
+			if (!is_array($rec)) continue;
+			$type = strtoupper((string)($rec["type"] ?? ""));
+			if ($type !== $mainType) continue;
+			$name = (string)($rec["name"] ?? "");
+			$nameNoDot = rtrim($name, ".");
+			if ($name === "" || $name === "@" || $nameNoDot === $domainNoDot) $hasRoot = true;
+			if ($nameNoDot === "www" || $nameNoDot === "www." . $domainNoDot) $hasWww = true;
+		}
+
+		$defaultTtl = isset($zone["defaultTTL"]) ? (int)$zone["defaultTTL"] : 86400;
+		if (!$hasRoot) $records[] = [
+			"name" => "@",
+			"type" => $mainType,
+			"value" => $main,
+			"ttl" => $defaultTtl
+		];
+		if ($wwwInclude && !$hasWww) $records[] = [
+			"name" => "www",
+			"type" => $mainType,
+			"value" => $main,
+			"ttl" => $defaultTtl
+		];
+
+		return $records;
+	}
+
+	public function ZoneInfo(string $domain)
+	{
+		// Returns full zone object (including zone-level defaults like main/wwwInclude).
 		$result = $this->callApi("GET", "/zone/$domain");
-		if ($result["status"]["type"] == "SUCCESS" && isset($result["data"][0]["resourceRecords"]))
-			return $result["data"][0]["resourceRecords"];
-		else
-			return false;
+		if (
+			is_array($result) &&
+			isset($result["status"]["type"]) &&
+			$result["status"]["type"] === "SUCCESS" &&
+			isset($result["object"]["type"]) &&
+			$result["object"]["type"] === "Zone" &&
+			isset($result["data"][0]) &&
+			is_array($result["data"][0])
+		) return $result["data"][0];
+		return false;
 	}
 
 	public function _ZoneGetDefaultNS(): array
@@ -186,13 +258,51 @@ class myInternetXApiClient
 
 	public function _ZonesGetVNS($domain)
 	{
-		// Returns the virtual nameserver of a zone
-		$search=json_decode('{ "filters": [ { "key": "name", "value": "'.$domain.'", "operator": "LIKE" } ] }');
-		$result=$this->callApi('POST', "/zone/_search",$search);
-		if ($result["status"]["type"]=="SUCCESS" && $result["object"]["type"]=="Zone" && is_array($result["data"]) && count($result["data"])==1)
-			return $result["data"][0]["virtualNameServer"];
-		else
-			return false;
+		// Returns the virtual nameserver of a zone.
+		// Prefer ZoneInfo, then fall back to ZoneList query.
+		$result = $this->callApi("GET", "/zone/" . $domain);
+		if (
+			is_array($result) &&
+			isset($result["status"]["type"]) &&
+			$result["status"]["type"] === "SUCCESS" &&
+			isset($result["object"]["type"]) &&
+			$result["object"]["type"] === "Zone" &&
+			isset($result["data"][0]) &&
+			is_array($result["data"][0])
+		) {
+			if (!empty($result["data"][0]["virtualNameServer"])) return $result["data"][0]["virtualNameServer"];
+			if (!empty($result["data"][0]["nameServers"][0]["name"])) return $result["data"][0]["nameServers"][0]["name"];
+		}
+
+		$search = [
+			"filters" => [
+				[
+					"key" => "name",
+					"value" => $domain,
+					"operator" => "LIKE"
+				]
+			]
+		];
+		$result = $this->callApi('POST', "/zone/_search?keys[]=name&keys[]=virtualNameServer", $search);
+		if (
+			is_array($result) &&
+			isset($result["status"]["type"]) &&
+			$result["status"]["type"] === "SUCCESS" &&
+			isset($result["object"]["type"]) &&
+			$result["object"]["type"] === "Zone" &&
+			isset($result["data"]) &&
+			is_array($result["data"])
+		) {
+			foreach ($result["data"] as $zone) {
+				if (
+					isset($zone["name"], $zone["virtualNameServer"]) &&
+					($zone["name"] === $domain || $zone["name"] === $domain . ".")
+				) return $zone["virtualNameServer"];
+			}
+			if (count($result["data"]) === 1 && !empty($result["data"][0]["virtualNameServer"])) return $result["data"][0]["virtualNameServer"];
+		}
+
+		return false;
 	}
 
 	public function ZoneAddRecord(string $domain, string $name, string $type, string $content, int $ttl = NULL, int $prio = NULL)
@@ -207,8 +317,8 @@ class myInternetXApiClient
 			"value" => $content
 		];
 		if ($ttl !== NULL) $entry["ttl"] = $ttl;
-		// Add prio for MX, SRV, NAPTR
-		if (in_array($type, ["MX", "SRV", "NAPTR"]) && $prio !== NULL) $entry["prio"] = $prio;
+		// ResourceRecord JSON field for priority is "pref".
+		if (in_array($type, ["MX", "SRV", "NAPTR"]) && $prio !== NULL) $entry["pref"] = $prio;
 
 		$data['adds'][] = $entry;
 
@@ -258,8 +368,11 @@ class myInternetXApiClient
 				"value" => $content
 			];
 			if (isset($ttl)) $record["ttl"] = $ttl;
-			// Add prio for MX, SRV, NAPTR
-			if (in_array($type, ["MX", "SRV", "NAPTR"]) && isset($entry["prio"])) $record["prio"] = $entry["prio"];
+			// Accept both input keys for backward compatibility, send documented key "pref".
+			if (in_array($type, ["MX", "SRV", "NAPTR"])) {
+				if (isset($entry["pref"])) $record["pref"] = $entry["pref"];
+				else if (isset($entry["prio"])) $record["pref"] = $entry["prio"];
+			}
 			$data['adds'][] = $record;
 		}
 		$result=$this->callApi("POST","/zone/".$domain."/_stream",$data);
@@ -286,8 +399,11 @@ class myInternetXApiClient
 				"value" => $content
 			];
 			if (isset($ttl)) $record["ttl"] = $ttl;
-			// Add prio for MX, SRV, NAPTR
-			if (in_array($type, ["MX", "SRV", "NAPTR"]) && isset($entry["prio"])) $record["prio"] = $entry["prio"];
+			// Accept both input keys for backward compatibility, send documented key "pref".
+			if (in_array($type, ["MX", "SRV", "NAPTR"])) {
+				if (isset($entry["pref"])) $record["pref"] = $entry["pref"];
+				else if (isset($entry["prio"])) $record["pref"] = $entry["prio"];
+			}
 			$data['rems'][] = $record;
 		}
 		$result=$this->callApi("POST","/zone/".$domain."/_stream",$data);
@@ -336,31 +452,48 @@ class myInternetXApiClient
   			$result=$this->callApi("GET","/zone/".$domain."/".$ns."/_axfr");
 		else 
 			return false;
-		if ($result["status"]["type"]=="SUCCESS" && $result["object"]["type"]=="Zone" && is_array($result["data"]) && count($result["data"])==1 && isset($result["object"]) && is_array($result["object"]) && isset($result["object"]["value"]) && $result["object"]["value"]==$domain)  
-		 {
-			$lines=explode("\n",$result["data"][0]);
-			if (empty($lines[count($lines)])) unset($lines[count($lines)-1]);
+		if (
+			is_array($result) &&
+			isset($result["status"]["type"]) &&
+			$result["status"]["type"] === "SUCCESS" &&
+			isset($result["object"]["type"]) &&
+			$result["object"]["type"] === "Zone" &&
+			isset($result["data"][0]) &&
+			is_string($result["data"][0]) &&
+			isset($result["object"]["value"]) &&
+			($result["object"]["value"] === $domain || $result["object"]["value"] === rtrim($domain, "."))
+		) {
+			$lines = preg_split('/\r?\n/', trim($result["data"][0]));
 			$return=array();
+			$domainNoDot = rtrim($domain, ".");
 
 			// Parses AXFR response into an array of records.
 			// Each record contains: FQDN, name, ttl, type, content.
 			// Assumes tab-separated fields as returned by the API.
 			foreach ($lines as $line) 
 			{
-				$tmp1=explode("\t",$line);
-				$tmp2["FQDN"]=$tmp1[0];
-				$tmp2["name"]=substr($tmp1[0],0,-(strlen($domain)+2));
-				if (empty($tmp2["name"])) $tmp2["name"]="@";
-				while (isset($tmp1[1]) && $tmp1[1] === "" && isset($tmp1[2]) && $tmp1[2] !== "IN") array_splice($tmp1, 1, 1); // Remove unexpexted tabs
-				$tmp2["ttl"]=$tmp1[1];
-				$tmp2["type"]=$tmp1[3];
-				$tmp2["content"]=$tmp1[4];
+				if ($line === "") continue;
+				$tmp1 = preg_split('/\t+/', $line);
+				if (!is_array($tmp1) || count($tmp1) < 5) continue;
+
+				$fqdn = rtrim($tmp1[0], ".");
+				$tmp2["FQDN"] = $tmp1[0];
+				if ($fqdn === $domainNoDot)
+					$tmp2["name"] = "@";
+				else if (substr($fqdn, -(strlen($domainNoDot) + 1)) === "." . $domainNoDot)
+					$tmp2["name"] = substr($fqdn, 0, -(strlen($domainNoDot) + 1));
+				else
+					$tmp2["name"] = $fqdn;
+
+				$tmp2["ttl"] = $tmp1[1];
+				$tmp2["type"] = $tmp1[3];
+				$tmp2["content"] = $tmp1[4];
 				$return[]=$tmp2;
 				unset($tmp1);
 				unset($tmp2);
 			}
 			return $return;
-		 }
+		}
 		else
 			return false;
 
