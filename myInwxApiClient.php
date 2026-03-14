@@ -15,6 +15,7 @@ class myInwxApiClient
 {
     private $endpoint;
     private $client;
+    private $cookieFile;
 
     public function __construct(string $username, string $password, bool $sandbox = false)
     {
@@ -35,6 +36,7 @@ class myInwxApiClient
     public function __destruct()
     {
         curl_close($this->client);
+        if (!empty($this->cookieFile) && file_exists($this->cookieFile)) unlink($this->cookieFile);
     }
 
     private function call($method, $params = [])
@@ -61,6 +63,32 @@ class myInwxApiClient
         return $result;
     }
 
+    private function callListAll(string $method, string $resultKey, array $params = [], int $pageLimit = 100): array
+    {
+        $page = 1;
+        $items = [];
+
+        do {
+            $requestParams = $params;
+            if (!isset($requestParams['page'])) $requestParams['page'] = $page;
+            if (!isset($requestParams['pagelimit'])) $requestParams['pagelimit'] = $pageLimit;
+
+            $result = $this->call($method, $requestParams);
+            $pageItems = $result['resData'][$resultKey] ?? [];
+            if (!is_array($pageItems) || empty($pageItems)) break;
+
+            foreach ($pageItems as $item) $items[] = $item;
+
+            $total = isset($result['resData']['count']) ? (int)$result['resData']['count'] : null;
+            if ($total !== null && count($items) >= $total) break;
+            if (count($pageItems) < (int)$requestParams['pagelimit']) break;
+
+            $page++;
+        } while (true);
+
+        return $items;
+    }
+
     public function AccountInfo(): array
     {
 	    $return=$this->call('account.info');
@@ -71,12 +99,12 @@ class myInwxApiClient
     // 
 
     // List all domains
-    public function DomainsList(bool $full=true): array
+    public function DomainsList(bool $full=true, array $filters = []): array
     {
 	    $return=array();
 	    $return_simple=array();
-	    $domains=$this->call('domain.list');
-	    foreach ($domains["resData"]["domain"] as $domain)
+	    $domains=$this->callListAll('domain.list', 'domain', $filters);
+	    foreach ($domains as $domain)
 	    {
 		    $return[$domain["domain"]]=$domain;
 		    array_push($return_simple,$domain["domain"]);
@@ -93,25 +121,80 @@ class myInwxApiClient
     }
 
     // Register a domain (very simple form)
-    public function DomainRegister($domain, $period = 1, $owner = null)
+    public function DomainRegister($domain, $period = 1, $registrant = null, $admin = null, $tech = null, $billing = null, array $nameservers = [])
     {
         $params = ['domain' => $domain, 'period' => $period];
-        if ($owner) {
-            $params['owner'] = $owner;
-        }
+        if ($registrant !== null) $params['registrant'] = $registrant;
+        if ($admin !== null) $params['admin'] = $admin;
+        if ($tech !== null) $params['tech'] = $tech;
+        if ($billing !== null) $params['billing'] = $billing;
+        if (!empty($nameservers)) $params['ns'] = $nameservers;
         return $this->call('domain.create', $params);
+    }
+
+    public function DomainUpdate(string $domain, array $params = [])
+    {
+        $params['domain'] = $domain;
+        return $this->call('domain.update', $params);
+    }
+
+    public function DomainUpdateContacts(string $domain, $registrant = null, $admin = null, $tech = null, $billing = null)
+    {
+        $params = [];
+        if ($registrant !== null) $params['registrant'] = $registrant;
+        if ($admin !== null) $params['admin'] = $admin;
+        if ($tech !== null) $params['tech'] = $tech;
+        if ($billing !== null) $params['billing'] = $billing;
+        return $this->DomainUpdate($domain, $params);
+    }
+
+    public function DomainContactRoles(): array
+    {
+        // According to INWX domain.create/domain.update the supported roles are:
+        // registrant, admin, tech and billing.
+        return ['registrant', 'admin', 'tech', 'billing'];
     }
 
     // BEGIN Contact Section
     //
 
-    public function ContactsList(): array
+    public function ContactsList(bool $full = true, array $filters = []): array
     {
 	    $return=array();
-	    $contacts=$this->call('contact.list');
-	    foreach ($contacts["resData"]["contact"] as $contact) 
+	    $return_simple=array();
+	    $contacts=$this->callListAll('contact.list', 'contact', $filters);
+	    foreach ($contacts as $contact) {
 		    $return[$contact["id"]]=$contact;
-	    return $return;
+		    $return_simple[]=$contact["id"];
+	    }
+	    if ($full) return $return;
+	    return $return_simple;
+    }
+
+    public function ContactInfo(int $id): array
+    {
+	    $return = $this->call('contact.info', ['id' => $id]);
+	    return $return["resData"];
+    }
+
+    public function ContactUpdate(int $id, array $params = [])
+    {
+	    $params['id'] = $id;
+	    return $this->call('contact.update', $params);
+    }
+
+    public function ContactUsageTypes(): array
+    {
+	    // INWX domain operations use contacts for these roles.
+	    return $this->DomainContactRoles();
+    }
+
+    public function ContactsWithUsage(): array
+    {
+	    $contacts = $this->ContactsList(true);
+	    $roles = $this->ContactUsageTypes();
+	    foreach ($contacts as &$contact) $contact['usableFor'] = $roles;
+	    return $contacts;
     }
 
     public function ContactsLog(): array
@@ -126,13 +209,18 @@ class myInwxApiClient
     //
 
     // List all zones
-    public function ZonesList(): array
+    public function ZonesList(bool $full = false, array $filters = []): array
     {
         $domains = [];
-        $result = $this->call('nameserver.list');
-        foreach ($result["resData"]["domains"] as $domain) {
-            if ($domain["type"] == "MASTER") $domains[] = $domain["domain"];
+        $fullDomains = [];
+        $result = $this->callListAll('nameserver.list', 'domains', $filters);
+        foreach ($result as $domain) {
+            if ($domain["type"] == "MASTER") {
+                $domains[] = $domain["domain"];
+                $fullDomains[$domain["domain"]] = $domain;
+            }
         }
+        if ($full) return $fullDomains;
         return $domains;
     }
 
@@ -145,6 +233,12 @@ class myInwxApiClient
 	    foreach ($result["resData"]["record"] as $record)
 		    $return[$record["id"]] = $record;
 	    return $return;
+    }
+
+    public function ZoneInfo(string $domain): array
+    {
+	    $result = $this->call('nameserver.info', ['domain' => $domain]);
+	    return $result["resData"] ?? [];
     }
 
     // General addRecord supporting all record types
@@ -211,12 +305,23 @@ class myInwxApiClient
     }
 
    // Returns Nameserver Sets
+    public function NameserverSetsList(bool $full = true, array $filters = []): array
+    {
+	    $list=$this->callListAll('nameserverset.list', 'nsset', $filters);
+	    $return = array();
+	    foreach ($list as $curset) {
+		    if ($full && isset($curset['id'])) $return[$curset['id']] = $curset;
+		    else $return[] = $curset;
+	    }
+	    return $return;
+    }
+
     public function ZonesListNameservers(): array
     {
-	    $list=$this->call('nameserverset.list');
+	    $sets = $this->NameserverSetsList(true);
 	    $return = array();
-	    foreach ($list['resData']['nsset'] as $curset)
-		    array_push($return,$curset['ns']);
+	    foreach ($sets as $curset)
+		    if (isset($curset['ns'])) array_push($return,$curset['ns']);
 	    return $return;
     }
 
@@ -224,9 +329,16 @@ class myInwxApiClient
     public function ZoneCreate(string $domain, array $nameservers = [])
     {
 	    if (empty($nameservers)) {
-		    $defaultns=$this->ZonesListNameservers();
-		    $nameservers=$defaultns[0];
+		    $accountInfo = $this->AccountInfo();
+		    $nssets = $this->NameserverSetsList(true);
+		    if (isset($accountInfo['defaultNsset']) && isset($nssets[$accountInfo['defaultNsset']]['ns']))
+			    $nameservers = $nssets[$accountInfo['defaultNsset']]['ns'];
+		    elseif (!empty($nssets)) {
+			    $firstSet = reset($nssets);
+			    if (isset($firstSet['ns'])) $nameservers = $firstSet['ns'];
+		    }
 	    }
+	    if (empty($nameservers)) throw new Exception('Could not determine the INWX default nameserver set');
 	
 	    return $this->call('nameserver.create', [
 		    'domain' => $domain,

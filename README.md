@@ -34,6 +34,12 @@ print_r($zones);
 $client->ZoneAddRecord('example.com', 'www', 'A', '192.0.2.10');
 ```
 
+The INWX client also includes a few domain/contact helpers such as
+`DomainsList(true)`, `ContactsList()`, `ContactInfo()`, and
+`DomainUpdateContacts()`.
+These methods are provider-specific convenience functions and are not part of a
+guaranteed common interface across all client classes in this repository.
+
 ## Why?
 
 Most vendor APIs are overly complex, use auto-loaders, or require extra dependencies.
