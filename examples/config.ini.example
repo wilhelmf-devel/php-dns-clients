@@ -1,0 +1,12 @@
+; Copy this file to config.ini and fill in your real credentials.
+
+[inwx]
+user = USERNAME
+pass = PASSWORD
+sandbox = false
+
+[internetx]
+user = USERNAME
+pass = PASSWORD
+context = 10
+apikey =

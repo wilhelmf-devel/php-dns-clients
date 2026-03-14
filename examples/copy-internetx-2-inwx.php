@@ -13,27 +13,53 @@
  *   - Verifies and prints the number of records transferred
  *
  * Usage:
- *   php copy-internetx-2-inwx.php [--dry-run]
+ *   php copy-internetx-2-inwx.php [--dry-run] [--ask-mfa]
  *
- * Note: You must set your credentials for both providers before running!
+ * Configuration:
+ *   Copy examples/config.ini.example to examples/config.ini and set:
+ *   - [inwx] user / pass / sandbox
+ *   - [internetx] user / pass / context or apikey
+ *
+ * Runtime note:
+ *   If your InternetX account uses MFA, run the script with --ask-mfa and it
+ *   will ask for the current 6 digit token at runtime.
  */
 
 // === Require dependencies ===
-require_once 'php-dns-clients/myInternetXApiClient.php';
-require_once 'php-dns-clients/myInwxApiClient.php';
+require_once __DIR__ . '/../myInternetXApiClient.php';
+require_once __DIR__ . '/../myInwxApiClient.php';
 
 // === Parse arguments ===
 $dryRun = in_array('--dry-run', $argv);
+$askMfa = in_array('--ask-mfa', $argv);
 
-// === 1. Define API credentials ===
-// Putting the credentials into the script is
-// not neccessarly recommended for production 
-$inwxUser = 'your_inwx_username';
-$inwxPass = 'your_inwx_password';
+// === 1. Load credentials ===
+$configFile = __DIR__ . '/config.ini';
+$config = @parse_ini_file($configFile, true, INI_SCANNER_TYPED);
+if (!is_array($config)) {
+	echo "Missing or unreadable config file: {$configFile}\n";
+	echo "Copy examples/config.ini.example to examples/config.ini and adjust it.\n";
+	exit(1);
+}
 
-$ixUser = 'your_internetx_username';
-$ixPass = 'your_internetx_password';
-$ixContext = '10'; // SchlundTech
+$inwxUser = (string)($config['inwx']['user'] ?? '');
+$inwxPass = (string)($config['inwx']['pass'] ?? '');
+$inwxSandbox = !empty($config['inwx']['sandbox']);
+
+$ixUser = (string)($config['internetx']['user'] ?? '');
+$ixPass = (string)($config['internetx']['pass'] ?? '');
+$ixContext = (string)($config['internetx']['context'] ?? '');
+$ixApiKey = (string)($config['internetx']['apikey'] ?? '');
+
+if ($inwxUser === '' || $inwxPass === '' || $ixContext === '') {
+	echo "Config file is missing required INWX or InternetX values.\n";
+	exit(1);
+}
+
+if ($ixApiKey === '' && ($ixUser === '' || $ixPass === '')) {
+	echo "InternetX config requires either user/pass or apikey.\n";
+	exit(1);
+}
 
 // === 2. Ask for domain name ===
 echo "Enter the domain name (e.g. example.com): ";
@@ -42,18 +68,28 @@ $domain = trim(fgets($handle));
 fclose($handle);
 
 // === 3. Create API client objects ===
-echo "Enter the MFA code for InternetX if set: ";
-$handle = fopen("php://stdin", "r");
-$mfa = trim(fgets($handle));
-fclose($handle);
+$ixToken = null;
+if ($ixApiKey === '' && $askMfa) {
+	echo "Enter the current InternetX MFA code: ";
+	$handle = fopen("php://stdin", "r");
+	$input = trim(fgets($handle));
+	fclose($handle);
 
-if (!preg_match('/^\d{6}$/', $mfa)) {
-	$mfa = null;
+	if (!preg_match('/^\d{6}$/', $input)) {
+		echo "InternetX MFA token must be 6 digits.\n";
+		exit(1);
+	}
+	$ixToken = $input;
 }
 
 // Note that INWX offers sandbox setups with independent URLs and users
-$inwx = new myInwxApiClient($inwxUser, $inwxPass);
-$internetX = new myInternetXApiClient($ixUser, $ixPass, $ixContext,$mfa);
+$inwx = new myInwxApiClient($inwxUser, $inwxPass, $inwxSandbox);
+$internetX = new myInternetXApiClient(
+	$ixApiKey === '' ? $ixUser : null,
+	$ixApiKey === '' ? $ixPass : null,
+	$ixContext,
+	$ixApiKey === '' ? $ixToken : $ixApiKey
+);
 
 
 // Normalize: remove any trailing dot
