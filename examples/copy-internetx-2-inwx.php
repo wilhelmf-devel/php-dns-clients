@@ -95,9 +95,9 @@ if (!$dryRun) {
 
 // === 7. Fetch the zone from Schlund ===
 echo "Fetching zone records from InternetX...\n";
-$records = $internetX->Zone_axfr($domain);
-if (empty($records)) {
-	echo "No records found or AXFR failed. Exiting.\n";
+$records = $internetX->ZoneListRecords($domain);
+if (empty($records) || !is_array($records)) {
+	echo "No records found or ZoneListRecords failed. Exiting.\n";
 	exit(1);
 }
 
@@ -105,29 +105,33 @@ if (empty($records)) {
 echo "Processing records...\n";
 $addedCount = 0;
 foreach ($records as $record) {
-	$type = strtoupper($record['type']);
+	$type = strtoupper($record['type'] ?? '');
+	if ($type === '') continue;
 
 	// Skip SOA always
 	if ($type === 'SOA') continue;
 
 	// Skip NS if it's for the zone root (e.g., '@' or matches the domain name)
-	$fqdn = rtrim($record['FQDN'], '.');
-	if ($type === 'NS' && ($record['name'] === '@' || $fqdn === $domain)) {
+	$name = $record['name'] ?? '@';
+	$fqdn = ($name === '@') ? $domain : rtrim($name . '.' . $domain, '.');
+	if ($type === 'NS' && ($name === '@' || $fqdn === $domain)) {
 		continue;
 	}
 
-	$name = $record['name'];
-	$content = $record['content'];
-	$ttl = (int) $record['ttl'];
+	$content = $record['value'] ?? ($record['content'] ?? null);
+	if ($content === null) continue;
+
+	$ttl = isset($record['ttl']) ? (int)$record['ttl'] : 3600;
+	if ($ttl<300) $ttl=300; // Min TTL of INWX is 300
 	$prio = null;
-	// $prio = $record['prio'] ?? null; // Prio not given seperatrly with the axfr function from InternetX
-	//
-	// Extract prio for MX and SRV (e.g., '10 mail.example.com.')
-	if (in_array($type, ['MX', 'SRV']))
-		if (preg_match('/^(\d+)\s+(.*)$/', $content, $matches)) {
-			$prio = (int)$matches[1];
-			$content = $matches[2];
-		}
+	if (isset($record['pref'])) $prio = (int)$record['pref'];
+	else if (isset($record['prio'])) $prio = (int)$record['prio'];
+
+	// Fallback for payloads where prio is encoded in value (e.g., '10 mail.example.com.')
+	if ($prio === null && in_array($type, ['MX', 'SRV']) && preg_match('/^(\d+)\s+(.*)$/', $content, $matches)) {
+		$prio = (int)$matches[1];
+		$content = $matches[2];
+	}
 
 
 	if ($dryRun) {
